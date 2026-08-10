@@ -148,7 +148,7 @@ def get_items_cached(key):
 # ──────────────────────────────
 # 📄 list.json 로드
 # ──────────────────────────────
-with open("list.json", "r", encoding="utf-8") as file:
+with open("api/list.json", "r", encoding="utf-8") as file:
     dlist = json.load(file)
 
 
@@ -157,7 +157,7 @@ app = Flask(__name__, template_folder=".")
 
 @app.route("/")
 def home():
-    return render_template("index.html", dlist=dlist)
+    return render_template("api/index.html", dlist=dlist)
 
 
 @app.route("/list")

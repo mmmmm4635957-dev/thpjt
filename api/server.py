@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import unquote
 from flask import Flask, render_template, jsonify, request, send_from_directory
 
 
@@ -229,6 +230,10 @@ def noimg():
 
 @app.route("/item/<key>")
 def item(key):
+    # Vercel 환경에서는 경로의 URL 인코딩(%EB%8F%99... 등)이 자동으로 안 풀릴 때가 있어서
+    # 명시적으로 디코딩. 이미 디코딩된 상태(로컬 등)여도 다시 적용해도 안전함.
+    key = unquote(key)
+
     # 들어오는 모든 요청은 캐시 여부와 무관하게 항상 기록
     ip = request.remote_addr
     data, from_cache = get_items_cached(key)
@@ -241,6 +246,7 @@ def item(key):
 def debug(key):
     """배포 환경에서 외부 API 호출이 실제로 어떤 상태코드/에러를 내는지 바로 확인용.
     문제 원인 파악 후에는 지워도 되는 임시 라우트."""
+    key = unquote(key)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }

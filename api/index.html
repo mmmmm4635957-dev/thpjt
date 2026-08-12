@@ -46,37 +46,94 @@
             color: #212529;
         }
         .tag-category {
-            margin-bottom: 18px;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #f1f3f5;
+            padding-bottom: 10px;
         }
         .tag-category:last-child {
             margin-bottom: 0;
+            border-bottom: none;
+            padding-bottom: 0;
         }
+
+        /* 1단계: 카테고리 토글 헤더 */
         .category-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
             font-size: 13px;
             font-weight: 700;
             color: #ff5058;
             text-transform: uppercase;
             letter-spacing: 0.03em;
-            margin-bottom: 8px;
-            padding-bottom: 6px;
-            border-bottom: 2px solid #ffe1e2;
+            padding: 6px 4px;
+            border-radius: 6px;
+            transition: background-color 0.15s ease;
         }
-        .tag-series {
-            margin-bottom: 10px;
+        .category-title:hover {
+            background-color: #fff5f5;
         }
-        .tag-series:last-child {
-            margin-bottom: 0;
-        }
+
+        /* 2단계: 시리즈 토글 헤더 */
         .series-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
             font-size: 12px;
             font-weight: 600;
             color: #868e96;
-            margin: 0 0 6px 2px;
+            margin: 0;
+            padding: 5px 4px 5px 10px;
+            border-radius: 6px;
+            transition: background-color 0.15s ease;
+        }
+        .series-title:hover {
+            background-color: #f8f9fa;
+        }
+
+        /* 토글 화살표 아이콘 */
+        .toggle-icon {
+            display: inline-block;
+            font-size: 10px;
+            transition: transform 0.2s ease;
+            color: inherit;
+            opacity: 0.7;
+        }
+        .category-title.collapsed .toggle-icon,
+        .series-title.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+
+        /* 접히는 내용물 — 부드러운 접힘 애니메이션 */
+        .category-content,
+        .series-content {
+            max-height: 2000px;
+            overflow: hidden;
+            transition: max-height 0.25s ease;
+        }
+        .category-content.collapsed,
+        .series-content.collapsed {
+            max-height: 0;
+        }
+
+        .category-content {
+            padding-top: 4px;
+        }
+        .tag-series {
+            margin-bottom: 4px;
+        }
+        .tag-series:last-child {
+            margin-bottom: 0;
         }
         .tag-buttons {
             display: flex;
             flex-direction: column;
             gap: 4px;
+            padding: 4px 0 4px 14px;
         }
         .btn-tag {
             display: block;
@@ -184,38 +241,49 @@
                     {% if dlist is mapping %}
                         {% for category, series_dict in dlist.items() %}
                             <div class="tag-category">
-                                <div class="category-title">{{ category }}</div>
+                                <div class="category-title collapsed" onclick="toggleSection(this)">
+                                    <span>{{ category }}</span>
+                                    <span class="toggle-icon">▾</span>
+                                </div>
+                                <div class="category-content collapsed">
 
-                                {% if series_dict is mapping %}
-                                    {% for series_name, keywords in series_dict.items() %}
-                                        <div class="tag-series">
-                                            <p class="series-title">{{ series_name }}</p>
-                                            <div class="tag-buttons">
-                                                {% if keywords is string %}
-                                                    <button class="btn-tag" onclick="selectTag(this, '{{ keywords }}')">{{ keywords }}</button>
-                                                {% elif keywords is iterable %}
-                                                    {% for kw in keywords %}
-                                                        {% if kw is string %}
-                                                            <button class="btn-tag" onclick="selectTag(this, '{{ kw }}')">{{ kw }}</button>
+                                    {% if series_dict is mapping %}
+                                        {% for series_name, keywords in series_dict.items() %}
+                                            <div class="tag-series">
+                                                <p class="series-title collapsed" onclick="toggleSection(this)">
+                                                    <span>{{ series_name }}</span>
+                                                    <span class="toggle-icon">▾</span>
+                                                </p>
+                                                <div class="series-content collapsed">
+                                                    <div class="tag-buttons">
+                                                        {% if keywords is string %}
+                                                            <button class="btn-tag" onclick="event.stopPropagation(); selectTag(this, '{{ keywords }}')">{{ keywords }}</button>
+                                                        {% elif keywords is iterable %}
+                                                            {% for kw in keywords %}
+                                                                {% if kw is string %}
+                                                                    <button class="btn-tag" onclick="event.stopPropagation(); selectTag(this, '{{ kw }}')">{{ kw }}</button>
+                                                                {% endif %}
+                                                            {% endfor %}
                                                         {% endif %}
-                                                    {% endfor %}
-                                                {% endif %}
+                                                    </div>
+                                                </div>
                                             </div>
-                                        </div>
-                                    {% endfor %}
-                                {% elif series_dict is string %}
-                                    <div class="tag-buttons">
-                                        <button class="btn-tag" onclick="selectTag(this, '{{ series_dict }}')">{{ series_dict }}</button>
-                                    </div>
-                                {% elif series_dict is iterable %}
-                                    <div class="tag-buttons">
-                                        {% for kw in series_dict %}
-                                            {% if kw is string %}
-                                                <button class="btn-tag" onclick="selectTag(this, '{{ kw }}')">{{ kw }}</button>
-                                            {% endif %}
                                         {% endfor %}
-                                    </div>
-                                {% endif %}
+                                    {% elif series_dict is string %}
+                                        <div class="tag-buttons">
+                                            <button class="btn-tag" onclick="event.stopPropagation(); selectTag(this, '{{ series_dict }}')">{{ series_dict }}</button>
+                                        </div>
+                                    {% elif series_dict is iterable %}
+                                        <div class="tag-buttons">
+                                            {% for kw in series_dict %}
+                                                {% if kw is string %}
+                                                    <button class="btn-tag" onclick="event.stopPropagation(); selectTag(this, '{{ kw }}')">{{ kw }}</button>
+                                                {% endif %}
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+
+                                </div>
                             </div>
                         {% endfor %}
                     {% elif dlist is iterable and dlist is not string %}
@@ -246,6 +314,15 @@
 </div>
 
 <script>
+// 🔽 카테고리/시리즈 접기·펼치기 토글 (1, 2단계 헤더 클릭 시)
+function toggleSection(headerEl) {
+    headerEl.classList.toggle('collapsed');
+    const content = headerEl.nextElementSibling;
+    if (content) {
+        content.classList.toggle('collapsed');
+    }
+}
+
 function selectTag(element, keyword) {
     const buttons = document.querySelectorAll('.btn-tag');
     buttons.forEach(btn => btn.classList.remove('active'));

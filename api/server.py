@@ -93,6 +93,23 @@ def hellomarket(key):
     return items
 
 
+def is_relevant(key, name):
+    """검색 키워드와 상품명이 아예 무관하면 False.
+    번개장터가 검색결과 외에 추천/인기 상품 블록을 같이 내려줄 때가 있어서,
+    키워드 단어 중 하나도 상품명에 없으면 걸러낸다."""
+    if not name:
+        return False
+    name_norm = name.replace(" ", "").lower()
+    # 키워드를 공백 기준으로 쪼개서, 2글자 이상인 토큰 중 하나라도 상품명에 포함되면 관련있다고 판단
+    tokens = [t for t in key.split() if len(t) >= 2]
+    if not tokens:
+        tokens = [key]
+    for t in tokens:
+        if t.replace(" ", "").lower() in name_norm:
+            return True
+    return False
+
+
 def fetch_from_apis(key):
     """실제로 외부 사이트를 크롤링해서 통합 결과를 만드는 함수 (캐시 미적용 원본 로직)."""
     item = []
@@ -122,6 +139,13 @@ def fetch_from_apis(key):
             })
     except Exception:
         pass
+
+    # 🔎 키워드와 무관한 항목(추천/인기 상품 등) 걸러내기
+    before_count = len(item)
+    item = [i for i in item if is_relevant(key, i.get("name"))]
+    filtered_count = before_count - len(item)
+    if filtered_count > 0:
+        logger.info(f"key={key} 무관 항목 {filtered_count}개 필터링됨 (전체 {before_count}개 중)")
 
     return item
 

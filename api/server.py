@@ -4,6 +4,7 @@ import time
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, render_template, jsonify, request, send_from_directory
 
 
@@ -47,15 +48,19 @@ def get_key_lock(key):
 # 🕸️ 외부 API 크롤링
 # ──────────────────────────────
 def bunjang(key):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     try:
         response = requests.get(
             "https://api.bunjang.co.kr/api/search/v8/pw/product/specs/keyword",
+            headers=headers,
             params={"q": key},
-            timeout=10,
+            timeout=8,
         )
         response.raise_for_status()
     except requests.RequestException as e:
-        print(f"번개장터 API 요청 실패: {e}")
+        logger.info(f"번개장터 API 요청 실패 (key={key}): {e}")
         return []
 
     payload = response.json()
@@ -80,11 +85,11 @@ def hellomarket(key):
             "https://www.hellomarket.com/api/search/items",
             headers=headers,
             params={"q": key},
-            timeout=10,
+            timeout=8,
         )
         response.raise_for_status()
     except requests.RequestException as e:
-        print(f"헬로마켓 API 요청 실패: {e}")
+        logger.info(f"헬로마켓 API 요청 실패 (key={key}): {e}")
         return []
 
     payload = response.json()
@@ -111,10 +116,27 @@ def is_relevant(key, name):
 
 
 def fetch_from_apis(key):
-    """실제로 외부 사이트를 크롤링해서 통합 결과를 만드는 함수 (캐시 미적용 원본 로직)."""
+    """실제로 외부 사이트를 크롤링해서 통합 결과를 만드는 함수 (캐시 미적용 원본 로직).
+    두 사이트를 순차 호출하면 최악의 경우 대기시간이 합산되어 Vercel 함수 실행시간
+    제한(무료 플랜 기본 10초)에 걸릴 수 있어서, 동시에 병렬로 호출한다."""
     item = []
 
-    lbunjang = bunjang(key)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_bunjang = executor.submit(bunjang, key)
+        future_hellomarket = executor.submit(hellomarket, key)
+
+        try:
+            lbunjang = future_bunjang.result()
+        except Exception as e:
+            logger.info(f"번개장터 처리 중 예외 (key={key}): {e}")
+            lbunjang = []
+
+        try:
+            lhellomarket = future_hellomarket.result()
+        except Exception as e:
+            logger.info(f"헬로마켓 처리 중 예외 (key={key}): {e}")
+            lhellomarket = []
+
     try:
         for i in lbunjang:
             item.append({
@@ -127,7 +149,6 @@ def fetch_from_apis(key):
     except Exception:
         pass
 
-    lhellomarket = hellomarket(key)
     try:
         for i in lhellomarket:
             item.append({
@@ -214,6 +235,38 @@ def item(key):
     logger.info(f"key={key} ip={ip} cache_hit={from_cache} result_count={len(data)}")
 
     return jsonify(data)
+
+
+@app.route("/debug/<key>")
+def debug(key):
+    """배포 환경에서 외부 API 호출이 실제로 어떤 상태코드/에러를 내는지 바로 확인용.
+    문제 원인 파악 후에는 지워도 되는 임시 라우트."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    result = {"key": key}
+
+    try:
+        r = requests.get(
+            "https://api.bunjang.co.kr/api/search/v8/pw/product/specs/keyword",
+            headers=headers, params={"q": key}, timeout=8,
+        )
+        result["bunjang_status"] = r.status_code
+        result["bunjang_body_preview"] = r.text[:300]
+    except Exception as e:
+        result["bunjang_error"] = str(e)
+
+    try:
+        r = requests.get(
+            "https://www.hellomarket.com/api/search/items",
+            headers=headers, params={"q": key}, timeout=8,
+        )
+        result["hellomarket_status"] = r.status_code
+        result["hellomarket_body_preview"] = r.text[:300]
+    except Exception as e:
+        result["hellomarket_error"] = str(e)
+
+    return jsonify(result)
 
 
 if __name__ == "__main__":

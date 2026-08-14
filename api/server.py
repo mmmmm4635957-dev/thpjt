@@ -93,6 +93,20 @@ def hellomarket(key):
         logger.info(f"헬로마켓 API 요청 실패 (key={key}): {e}")
         return []
 
+    key = key[2:]
+
+    try:
+        response = requests.get(
+            "https://www.hellomarket.com/api/search/items",
+            headers=headers,
+            params={"q": key},
+            timeout=8,
+        )
+        response.raise_for_status()
+    except requests.RequestException as e:
+        logger.info(f"헬로마켓 API 요청 실패 (key={key}): {e}")
+        return []
+
     payload = response.json()
     items = payload.get("list", {})
 
@@ -240,39 +254,6 @@ def item(key):
     logger.info(f"key={key} ip={ip} cache_hit={from_cache} result_count={len(data)}")
 
     return jsonify(data)
-
-
-@app.route("/debug/<key>")
-def debug(key):
-    """배포 환경에서 외부 API 호출이 실제로 어떤 상태코드/에러를 내는지 바로 확인용.
-    문제 원인 파악 후에는 지워도 되는 임시 라우트."""
-    key = unquote(key)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    result = {"key": key}
-
-    try:
-        r = requests.get(
-            "https://api.bunjang.co.kr/api/search/v8/pw/product/specs/keyword",
-            headers=headers, params={"q": key}, timeout=8,
-        )
-        result["bunjang_status"] = r.status_code
-        result["bunjang_body_preview"] = r.text[:300]
-    except Exception as e:
-        result["bunjang_error"] = str(e)
-
-    try:
-        r = requests.get(
-            "https://www.hellomarket.com/api/search/items",
-            headers=headers, params={"q": key}, timeout=8,
-        )
-        result["hellomarket_status"] = r.status_code
-        result["hellomarket_body_preview"] = r.text[:300]
-    except Exception as e:
-        result["hellomarket_error"] = str(e)
-
-    return jsonify(result)
 
 
 if __name__ == "__main__":

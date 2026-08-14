@@ -76,25 +76,11 @@ def bunjang(key):
     return items
 
 
-def hellomarket(key):
+def _hellomarket_request(key):
+    """헬로마켓 검색 API를 실제로 한 번 호출하는 내부 헬퍼."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-
-    try:
-        response = requests.get(
-            "https://www.hellomarket.com/api/search/items",
-            headers=headers,
-            params={"q": key},
-            timeout=8,
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        logger.info(f"헬로마켓 API 요청 실패 (key={key}): {e}")
-        return []
-
-    key = key[2:]
-
     try:
         response = requests.get(
             "https://www.hellomarket.com/api/search/items",
@@ -108,7 +94,23 @@ def hellomarket(key):
         return []
 
     payload = response.json()
-    items = payload.get("list", {})
+    return payload.get("list", {})
+
+
+def hellomarket(key):
+    items = _hellomarket_request(key)
+
+    # "동방OO" 검색어면 접두어를 뗀 결과도 같이 검색해서 합침 (둘 중 하나에서만 걸리는 매물이 있어서)
+    if key[:2] == "동방":
+        stripped_key = key[2:]
+        stripped_items = _hellomarket_request(stripped_key)
+
+        # itemIdx 기준으로 중복 제거하며 합치기
+        seen_idx = {i.get("itemIdx") for i in items}
+        for i in stripped_items:
+            if i.get("itemIdx") not in seen_idx:
+                items.append(i)
+                seen_idx.add(i.get("itemIdx"))
 
     return items
 
@@ -124,6 +126,9 @@ def is_relevant(key, name):
     tokens = [t for t in key.split() if len(t) >= 2]
     if not tokens:
         tokens = [key]
+    # "동방OO" 검색어는 헬로마켓 폴백 검색처럼 "동방"이 빠진 상품명도 있을 수 있어서 같이 확인
+    if key[:2] == "동방" and len(key) > 2:
+        tokens.append(key[2:])
     for t in tokens:
         if t.replace(" ", "").lower() in name_norm:
             return True
@@ -254,6 +259,39 @@ def item(key):
     logger.info(f"key={key} ip={ip} cache_hit={from_cache} result_count={len(data)}")
 
     return jsonify(data)
+
+
+@app.route("/debug/<key>")
+def debug(key):
+    """배포 환경에서 외부 API 호출이 실제로 어떤 상태코드/에러를 내는지 바로 확인용.
+    문제 원인 파악 후에는 지워도 되는 임시 라우트."""
+    key = unquote(key)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    result = {"key": key}
+
+    try:
+        r = requests.get(
+            "https://api.bunjang.co.kr/api/search/v8/pw/product/specs/keyword",
+            headers=headers, params={"q": key}, timeout=8,
+        )
+        result["bunjang_status"] = r.status_code
+        result["bunjang_body_preview"] = r.text[:300]
+    except Exception as e:
+        result["bunjang_error"] = str(e)
+
+    try:
+        r = requests.get(
+            "https://www.hellomarket.com/api/search/items",
+            headers=headers, params={"q": key}, timeout=8,
+        )
+        result["hellomarket_status"] = r.status_code
+        result["hellomarket_body_preview"] = r.text[:300]
+    except Exception as e:
+        result["hellomarket_error"] = str(e)
+
+    return jsonify(result)
 
 
 if __name__ == "__main__":

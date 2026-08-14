@@ -251,7 +251,33 @@
         .bg-bunjang { background-color: #ff5058; }
         .bg-hellomarket { background-color: #2bb930; }
 
-        #loading { display: none; text-align: center; margin: 30px 0; }
+        /* 🔀 정렬 바 */
+        .sort-bar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        .btn-sort {
+            padding: 6px 14px;
+            font-size: 13px;
+            font-weight: 500;
+            border-radius: 20px;
+            border: 1px solid #dee2e6;
+            background-color: #fff;
+            color: #495057;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .btn-sort:hover {
+            border-color: #ff5058;
+            color: #ff5058;
+        }
+        .btn-sort.active {
+            background-color: #ff5058;
+            color: #fff;
+            border-color: #ff5058;
+        }
     </style>
 </head>
 <body>
@@ -324,13 +350,14 @@
             </div>
         </div>
         <div class="child2">
-            <!-- ⏳ 로딩 스피너 -->
-            <div id="loading">
-                <div class="spinner-border text-danger" role="status"></div>
-                <p class="mt-2 text-muted">최신 매물을 검색하고 있습니다...</p>
+            <!-- 🔀 정렬 버튼 (항상 같은 위치에 고정) -->
+            <div class="sort-bar">
+                <button class="btn-sort active" data-order="default" onclick="setSort('default')">기본순</button>
+                <button class="btn-sort" data-order="asc" onclick="setSort('asc')">가격 낮은순</button>
+                <button class="btn-sort" data-order="desc" onclick="setSort('desc')">가격 높은순</button>
             </div>
 
-            <!-- 🗂️ 상품 결과 그리드 (한 줄에 4개 고정) -->
+            <!-- 🗂️ 상품 결과 그리드 (로딩 스피너도 이 안에서 표시되어 정렬 줄이 안 밀림) -->
             <div class="row row-cols-4 g-3" id="result-grid">
                 <div class="col-12 text-center text-muted my-5">왼쪽의 카테고리 태그를 클릭하면 즉시 검색이 시작됩니다.</div>
             </div>
@@ -339,6 +366,39 @@
 </div>
 
 <script>
+let currentData = [];   // 마지막으로 받은 검색 결과 전체 (정렬용으로 보관)
+let currentSort = 'default';
+
+function setSort(order) {
+    currentSort = order;
+    document.querySelectorAll('.btn-sort').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.order === order);
+    });
+    renderCurrentData();
+}
+
+function getSortedData(data, order) {
+    if (order === 'default') return data;
+
+    // 가격 정보가 있는 항목만 정렬하고, 가격 없는 항목은 순서와 무관하게 맨 뒤로
+    const hasPrice = i => i.price !== null && i.price !== undefined && !isNaN(Number(i.price));
+    const withPrice = data.filter(hasPrice);
+    const withoutPrice = data.filter(i => !hasPrice(i));
+
+    withPrice.sort((a, b) => {
+        const diff = Number(a.price) - Number(b.price);
+        return order === 'asc' ? diff : -diff;
+    });
+
+    return withPrice.concat(withoutPrice);
+}
+
+function renderCurrentData() {
+    const grid = document.getElementById('result-grid');
+    const sorted = getSortedData(currentData, currentSort);
+    renderItems(sorted, grid);
+}
+
 // 🔽 카테고리 접기·펼치기 (1단계 — 헤더 전체가 토글 전용)
 function toggleSection(headerEl) {
     headerEl.classList.toggle('collapsed');
@@ -367,10 +427,20 @@ function selectTag(element, keyword) {
 
 function fetchItems(key) {
     const grid = document.getElementById('result-grid');
-    const loading = document.getElementById('loading');
-    
-    grid.innerHTML = '';
-    loading.style.display = 'block';
+
+    // 로딩 표시를 grid 내부에 렌더링 — 정렬 줄(sort-bar) 위치가 안 밀림
+    grid.innerHTML = `
+        <div class="col-12 text-center my-5">
+            <div class="spinner-border text-danger" role="status"></div>
+            <p class="mt-2 text-muted">최신 매물을 검색하고 있습니다...</p>
+        </div>
+    `;
+
+    // 새로 검색할 땐 정렬을 기본순으로 리셋
+    currentSort = 'default';
+    document.querySelectorAll('.btn-sort').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.order === 'default');
+    });
 
     fetch(`/item/${encodeURIComponent(key)}`)
         .then(response => {
@@ -378,50 +448,53 @@ function fetchItems(key) {
             return response.json();
         })
         .then(data => {
-            loading.style.display = 'none';
-            
-            if (!data || data.length === 0) {
-                grid.innerHTML = `<div class="col-12 text-center text-muted my-5">조회된 상품이 없습니다.</div>`;
-                return;
-            }
-
-            // 💡 한 줄에 4개로 고정 — 세로 4줄 제한을 위해 최대 16개까지만 노출
-            const colsPerRow = 4;
-            const maxItems = colsPerRow * 4;
-
-            // 최대 노출 개수만큼만 잘라서 순회 처리
-            const limitedData = data.slice(0, maxItems);
-
-            limitedData.forEach(item => {
-                const formattedPrice = item.price ? Number(item.price).toLocaleString() + '원' : '가격 정보 없음';
-                const imgUrl = item.img ? item.img : 'noimg.webp';
-                const badgeClass = item.domain === 'bunjang' ? 'bg-bunjang' : 'bg-hellomarket';
-                const domainName = item.domain === 'bunjang' ? '번개장터' : '헬로마켓';
-
-                const cardHtml = `
-                    <div class="col">
-                        <a href="${item.url}" target="_blank" class="text-decoration-none text-dark">
-                            <div class="product-card">
-                                <div class="card-img-wrapper">
-                                    <span class="badge-domain ${badgeClass}">${domainName}</span>
-                                    <img src="${imgUrl}" alt="${item.name}" onerror="this.onerror=null;this.src='noimg.webp'">
-                                </div>
-                                <div class="card-body">
-                                    <h5 class="card-title">${item.name}</h5>
-                                    <div class="card-price">${formattedPrice}</div>
-                                </div>
-                            </div>
-                        </a>
-                    </div>
-                `;
-                grid.insertAdjacentHTML('beforeend', cardHtml);
-            });
+            currentData = data || [];
+            renderItems(getSortedData(currentData, currentSort), grid);
         })
         .catch(error => {
-            loading.style.display = 'none';
             console.error('Error:', error);
             grid.innerHTML = `<div class="col-12 text-center text-danger my-5">데이터를 가져오는 중 에러가 발생했습니다.</div>`;
         });
+}
+
+function renderItems(data, grid) {
+    if (!data || data.length === 0) {
+        grid.innerHTML = `<div class="col-12 text-center text-muted my-5">조회된 상품이 없습니다.</div>`;
+        return;
+    }
+
+    // 💡 한 줄에 4개로 고정 — 세로 4줄 제한을 위해 최대 16개까지만 노출
+    const colsPerRow = 4;
+    const maxItems = colsPerRow * 4;
+
+    // 최대 노출 개수만큼만 잘라서 순회 처리
+    const limitedData = data.slice(0, maxItems);
+
+    grid.innerHTML = '';
+    limitedData.forEach(item => {
+        const formattedPrice = item.price ? Number(item.price).toLocaleString() + '원' : '가격 정보 없음';
+        const imgUrl = item.img ? item.img : 'noimg.webp';
+        const badgeClass = item.domain === 'bunjang' ? 'bg-bunjang' : 'bg-hellomarket';
+        const domainName = item.domain === 'bunjang' ? '번개장터' : '헬로마켓';
+
+        const cardHtml = `
+            <div class="col">
+                <a href="${item.url}" target="_blank" class="text-decoration-none text-dark">
+                    <div class="product-card">
+                        <div class="card-img-wrapper">
+                            <span class="badge-domain ${badgeClass}">${domainName}</span>
+                            <img src="${imgUrl}" alt="${item.name}" onerror="this.onerror=null;this.src='noimg.webp'">
+                        </div>
+                        <div class="card-body">
+                            <h5 class="card-title">${item.name}</h5>
+                            <div class="card-price">${formattedPrice}</div>
+                        </div>
+                    </div>
+                </a>
+            </div>
+        `;
+        grid.insertAdjacentHTML('beforeend', cardHtml);
+    });
 }
 </script>
 

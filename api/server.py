@@ -235,19 +235,19 @@ def home():
     return render_template("index.html", dlist=dlist)
 
 
-@app.route("/list")
+@app.route("/croll/list")
 def test_page():
     return jsonify(dlist)
 
 
-@app.route("/noimg.webp")
+@app.route("/croll/noimg.webp")
 def noimg():
     # index.html의 <img src="noimg.webp">가 정상적으로 로드되도록
     # 폴더 전체를 열어주는 대신 이 파일 하나만 명시적으로 서빙
     return send_from_directory(BASE_DIR, "noimg.webp")
 
 
-@app.route("/item/<key>")
+@app.route("/croll/item/<key>")
 def item(key):
     # Vercel 환경에서는 경로의 URL 인코딩(%EB%8F%99... 등)이 자동으로 안 풀릴 때가 있어서
     # 명시적으로 디코딩. 이미 디코딩된 상태(로컬 등)여도 다시 적용해도 안전함.
@@ -261,7 +261,7 @@ def item(key):
     return jsonify(data)
 
 
-@app.route("/debug/<key>")
+@app.route("/croll/debug/<key>")
 def debug(key):
     """배포 환경에서 외부 API 호출이 실제로 어떤 상태코드/에러를 내는지 바로 확인용.
     문제 원인 파악 후에는 지워도 되는 임시 라우트."""

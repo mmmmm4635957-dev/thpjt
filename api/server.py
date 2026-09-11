@@ -1,298 +1,502 @@
-import os
-import requests
-import time
-import json
-import logging
-import threading
-from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import unquote
-from flask import Flask, render_template, jsonify, request, send_from_directory
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>thpjt</title>
+    <!-- 부트스트랩 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        html, body { height: 100%; }
+        body { background-color: #f8f9fa; font-family: 'Noto Sans KR', sans-serif; }
+        .main-container { max-width: 1300px; margin: 40px auto; padding: 0 15px; }
 
+        /* 🧩 좌우 레이아웃 */
+        .parent {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+            width: 100%;
+        }
+        .child1 {
+            width: 300px;
+            flex-shrink: 0;
+            position: sticky;
+            top: 20px;
+            height: calc(100vh - 40px);
+        }
+        .child2 {
+            flex: 1;
+            min-width: 0;
+        }
 
-# server.py 파일 자신이 있는 폴더를 기준으로 경로를 잡음
-# → 로컬/Vercel 어떤 환경에서 실행되든 항상 같은 폴더의 파일들을 정확히 찾음
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        /* 🏷️ 사이드바(세로 태그 목록) */
+        .tag-container {
+            background: #fff;
+            padding: 18px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            height: 100%;
+            overflow-y: auto;
+        }
+        .tag-container h5 {
+            font-weight: 700;
+            font-size: 16px;
+            margin-bottom: 14px;
+            color: #212529;
+        }
+        .tag-category {
+            margin-bottom: 10px;
+            border-bottom: 1px solid #f1f3f5;
+            padding-bottom: 10px;
+        }
+        .tag-category:last-child {
+            margin-bottom: 0;
+            border-bottom: none;
+            padding-bottom: 0;
+        }
 
+        /* 1단계: 카테고리 토글 헤더 (전체가 접기/펼치기 전용) */
+        .category-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+            font-size: 13px;
+            font-weight: 700;
+            color: #ff5058;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            padding: 6px 4px;
+            border-radius: 6px;
+            transition: background-color 0.15s ease;
+        }
+        .category-title:hover {
+            background-color: #fff5f5;
+        }
 
-# ──────────────────────────────
-# ⚙️ 캐시 설정
-# ──────────────────────────────
-CACHE_TTL = 300  # 캐시 유효 시간(초) — 이 시간 안엔 같은 키워드는 외부 API를 다시 안 부름
+        /* 2단계: 시리즈 헤더 — 텍스트는 검색, 화살표는 접기/펼치기 (역할 분리) */
+        .series-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 0;
+            padding: 2px 4px 2px 10px;
+            border-radius: 6px;
+        }
+        .series-label {
+            flex: 1;
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            font-weight: 600;
+            color: #495057;
+            padding: 5px 4px;
+            border-radius: 6px;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .series-label:hover {
+            background-color: #fff5f5;
+            color: #ff5058;
+        }
+        .series-label.active {
+            background-color: #ff5058;
+            color: #fff;
+        }
+        .series-toggle-btn {
+            flex-shrink: 0;
+            cursor: pointer;
+            user-select: none;
+            padding: 5px 8px;
+            color: #adb5bd;
+            border-radius: 6px;
+        }
+        .series-toggle-btn:hover {
+            background-color: #f1f3f5;
+        }
 
-CACHE = {}              # { key: {"data": [...], "timestamp": float} }
-CACHE_LOCK = threading.Lock()       # CACHE 딕셔너리 자체를 보호
+        /* 토글 화살표 아이콘 */
+        .toggle-icon {
+            display: inline-block;
+            font-size: 10px;
+            transition: transform 0.2s ease;
+            color: inherit;
+            opacity: 0.7;
+        }
+        .category-title.collapsed .toggle-icon,
+        .series-toggle-btn.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
 
-KEY_LOCKS = {}          # { key: threading.Lock() } — 키워드별 크롤링 중복 방지
-KEY_LOCKS_META_LOCK = threading.Lock()  # KEY_LOCKS 딕셔너리를 보호
+        /* 접히는 내용물 — 부드러운 접힘 애니메이션 */
+        .category-content,
+        .series-content {
+            max-height: 2000px;
+            overflow: hidden;
+            transition: max-height 0.25s ease;
+        }
+        .category-content.collapsed,
+        .series-content.collapsed {
+            max-height: 0;
+        }
 
-# ──────────────────────────────
-# 📝 로깅 설정 — 파일이 아니라 콘솔(stdout)로 출력
-# Vercel 서버리스 환경은 파일시스템이 읽기 전용이라 파일 로깅이 실패함.
-# 콘솔로 찍으면 로컬에서도 보이고, Vercel 대시보드의 함수 로그에서도 그대로 확인 가능.
-# ──────────────────────────────
-logger = logging.getLogger("dongbang")
-logger.setLevel(logging.INFO)
-_handler = logging.StreamHandler()
-_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
-logger.addHandler(_handler)
+        .category-content {
+            padding-top: 4px;
+        }
+        .tag-series {
+            margin-bottom: 2px;
+        }
+        .tag-series:last-child {
+            margin-bottom: 0;
+        }
+        .tag-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 4px 0 6px 14px;
+        }
+        .btn-tag {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 7px 12px;
+            font-size: 13px;
+            font-weight: 500;
+            border-radius: 8px;
+            border: 1px solid #eee;
+            background-color: #fafafa;
+            color: #495057;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .btn-tag:hover, .btn-tag.active {
+            background-color: #ff5058;
+            color: #fff;
+            border-color: #ff5058;
+            box-shadow: 0 3px 8px rgba(255, 80, 88, 0.25);
+            transform: translateX(2px);
+        }
 
+        /* 스크롤바 스타일(선택) */
+        .tag-container::-webkit-scrollbar { width: 6px; }
+        .tag-container::-webkit-scrollbar-thumb { background: #e9ecef; border-radius: 10px; }
+        .tag-container::-webkit-scrollbar-thumb:hover { background: #dee2e6; }
 
-def get_key_lock(key):
-    """키워드별 락을 없으면 만들고, 있으면 재사용."""
-    with KEY_LOCKS_META_LOCK:
-        if key not in KEY_LOCKS:
-            KEY_LOCKS[key] = threading.Lock()
-        return KEY_LOCKS[key]
+        /* 🛍️ 상점 카드 스타일링 */
+        .product-card {
+            border: none;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #fff;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .product-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+        .card-img-wrapper {
+            position: relative;
+            width: 100%;
+            padding-top: 100%; /* 1:1 비율 */
+            background-color: #eaeaea;
+        }
+        .card-img-wrapper img {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover;
+        }
+        .card-body {
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+        .card-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.4;
+            height: 2.8em;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            margin-bottom: 6px;
+        }
+        .card-price {
+            font-size: 15px;
+            font-weight: 700;
+            color: #ff5058;
+            margin-top: auto;
+        }
+        .badge-domain {
+            position: absolute;
+            top: 8px; left: 8px;
+            padding: 4px 8px;
+            font-size: 10px;
+            font-weight: bold;
+            border-radius: 20px;
+            z-index: 10;
+            color: #fff;
+        }
+        .bg-bunjang { background-color: #ff5058; }
+        .bg-hellomarket { background-color: #2bb930; }
 
+        /* 🔀 정렬 바 */
+        .sort-bar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        .btn-sort {
+            padding: 6px 14px;
+            font-size: 13px;
+            font-weight: 500;
+            border-radius: 20px;
+            border: 1px solid #dee2e6;
+            background-color: #fff;
+            color: #495057;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .btn-sort:hover {
+            border-color: #ff5058;
+            color: #ff5058;
+        }
+        .btn-sort.active {
+            background-color: #ff5058;
+            color: #fff;
+            border-color: #ff5058;
+        }
+    </style>
+</head>
+<body>
 
-# ──────────────────────────────
-# 🕸️ 외부 API 크롤링
-# ──────────────────────────────
-def bunjang(key):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+<div class="container main-container">
+    <div class="parent">
+        <div class="child1">
+            <div class="tag-container">
+                <div id="tag-list">
+                    {% if dlist is mapping %}
+                        {% for category, series_dict in dlist.items() %}
+                            <div class="tag-category">
+                                <div class="category-title collapsed" onclick="toggleSection(this)">
+                                    <span>{{ category }}</span>
+                                    <span class="toggle-icon">▾</span>
+                                </div>
+                                <div class="category-content collapsed">
+
+                                    {% if series_dict is mapping %}
+                                        {% for series_name, keywords in series_dict.items() %}
+                                            <div class="tag-series">
+                                                <p class="series-title">
+                                                    <span class="series-label" onclick="selectTag(this, '{{ series_name }}')">{{ series_name }}</span>
+                                                    <span class="series-toggle-btn collapsed" onclick="toggleSeriesSection(this)">
+                                                        <span class="toggle-icon">▾</span>
+                                                    </span>
+                                                </p>
+                                                <div class="series-content collapsed">
+                                                    <div class="tag-buttons">
+                                                        {% if keywords is string %}
+                                                            <button class="btn-tag" onclick="selectTag(this, '{{ keywords }}')">{{ keywords }}</button>
+                                                        {% elif keywords is iterable %}
+                                                            {% for kw in keywords %}
+                                                                {% if kw is string %}
+                                                                    <button class="btn-tag" onclick="selectTag(this, '{{ kw }}')">{{ kw }}</button>
+                                                                {% endif %}
+                                                            {% endfor %}
+                                                        {% endif %}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        {% endfor %}
+                                    {% elif series_dict is string %}
+                                        <div class="tag-buttons">
+                                            <button class="btn-tag" onclick="selectTag(this, '{{ series_dict }}')">{{ series_dict }}</button>
+                                        </div>
+                                    {% elif series_dict is iterable %}
+                                        <div class="tag-buttons">
+                                            {% for kw in series_dict %}
+                                                {% if kw is string %}
+                                                    <button class="btn-tag" onclick="selectTag(this, '{{ kw }}')">{{ kw }}</button>
+                                                {% endif %}
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% elif dlist is iterable and dlist is not string %}
+                        <div class="tag-buttons">
+                            {% for tag in dlist %}
+                                {% if tag is string %}
+                                    <button class="btn-tag" onclick="selectTag(this, '{{ tag }}')">{{ tag }}</button>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="child2">
+            <!-- 🔀 정렬 버튼 (항상 같은 위치에 고정) -->
+            <div class="sort-bar">
+                <button class="btn-sort active" data-order="default" onclick="setSort('default')">기본순</button>
+                <button class="btn-sort" data-order="asc" onclick="setSort('asc')">가격 낮은순</button>
+                <button class="btn-sort" data-order="desc" onclick="setSort('desc')">가격 높은순</button>
+            </div>
+
+            <!-- 🗂️ 상품 결과 그리드 (로딩 스피너도 이 안에서 표시되어 정렬 줄이 안 밀림) -->
+            <div class="row row-cols-4 g-3" id="result-grid">
+                <div class="col-12 text-center text-muted my-5">왼쪽의 카테고리 태그를 클릭하면 즉시 검색이 시작됩니다.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let currentData = [];   // 마지막으로 받은 검색 결과 전체 (정렬용으로 보관)
+let currentSort = 'default';
+
+function setSort(order) {
+    currentSort = order;
+    document.querySelectorAll('.btn-sort').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.order === order);
+    });
+    renderCurrentData();
+}
+
+function getSortedData(data, order) {
+    if (order === 'default') return data;
+
+    // 가격 정보가 있는 항목만 정렬하고, 가격 없는 항목은 순서와 무관하게 맨 뒤로
+    const hasPrice = i => i.price !== null && i.price !== undefined && !isNaN(Number(i.price));
+    const withPrice = data.filter(hasPrice);
+    const withoutPrice = data.filter(i => !hasPrice(i));
+
+    withPrice.sort((a, b) => {
+        const diff = Number(a.price) - Number(b.price);
+        return order === 'asc' ? diff : -diff;
+    });
+
+    return withPrice.concat(withoutPrice);
+}
+
+function renderCurrentData() {
+    const grid = document.getElementById('result-grid');
+    const sorted = getSortedData(currentData, currentSort);
+    renderItems(sorted, grid);
+}
+
+// 🔽 카테고리 접기·펼치기 (1단계 — 헤더 전체가 토글 전용)
+function toggleSection(headerEl) {
+    headerEl.classList.toggle('collapsed');
+    const content = headerEl.nextElementSibling;
+    if (content) {
+        content.classList.toggle('collapsed');
     }
-    try:
-        response = requests.get(
-            "https://api.bunjang.co.kr/api/search/v8/pw/product/specs/keyword",
-            headers=headers,
-            params={"q": key},
-            timeout=8,
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        logger.info(f"번개장터 API 요청 실패 (key={key}): {e}")
-        return []
+}
 
-    payload = response.json()
-    blocks = payload.get("data", {}).get("searchSpec", {}).get("uiBlockList", [])
-
-    items = []
-    for block in blocks:
-        result_list = block.get("searchResponse", {}).get("data", [])
-        if isinstance(result_list, list):
-            items.extend(result_list)
-
-    return items
-
-
-def _hellomarket_request(key):
-    """헬로마켓 검색 API를 실제로 한 번 호출하는 내부 헬퍼."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+// 🔽 시리즈 접기·펼치기 (2단계 — 화살표 아이콘만 토글, 텍스트는 검색용으로 분리)
+function toggleSeriesSection(iconWrapperEl) {
+    iconWrapperEl.classList.toggle('collapsed');
+    const header = iconWrapperEl.closest('.series-title');
+    const content = header.nextElementSibling;
+    if (content) {
+        content.classList.toggle('collapsed');
     }
-    try:
-        response = requests.get(
-            "https://www.hellomarket.com/api/search/items",
-            headers=headers,
-            params={"q": key},
-            timeout=8,
-        )
-        response.raise_for_status()
-    except requests.RequestException as e:
-        logger.info(f"헬로마켓 API 요청 실패 (key={key}): {e}")
-        return []
+}
 
-    payload = response.json()
-    return payload.get("list", {})
+function selectTag(element, keyword) {
+    // 검색 가능한 모든 버튼(키워드 버튼 + 시리즈명 라벨)에서 active 표시 초기화
+    document.querySelectorAll('.btn-tag, .series-label').forEach(el => el.classList.remove('active'));
+    element.classList.add('active');
+    fetchItems(keyword);
+}
 
+function fetchItems(key) {
+    const grid = document.getElementById('result-grid');
 
-def hellomarket(key):
-    items = _hellomarket_request(key)
+    // 로딩 표시를 grid 내부에 렌더링 — 정렬 줄(sort-bar) 위치가 안 밀림
+    grid.innerHTML = `
+        <div class="col-12 text-center my-5">
+            <div class="spinner-border text-danger" role="status"></div>
+            <p class="mt-2 text-muted">최신 매물을 검색하고 있습니다...</p>
+        </div>
+    `;
 
-    # "동방OO" 검색어면 접두어를 뗀 결과도 같이 검색해서 합침 (둘 중 하나에서만 걸리는 매물이 있어서)
-    if key[:2] == "동방":
-        stripped_key = key[2:]
-        stripped_items = _hellomarket_request(stripped_key)
+    // 새로 검색할 땐 정렬을 기본순으로 리셋
+    currentSort = 'default';
+    document.querySelectorAll('.btn-sort').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.order === 'default');
+    });
 
-        # itemIdx 기준으로 중복 제거하며 합치기
-        seen_idx = {i.get("itemIdx") for i in items}
-        for i in stripped_items:
-            if i.get("itemIdx") not in seen_idx:
-                items.append(i)
-                seen_idx.add(i.get("itemIdx"))
+    fetch(`/croll/item/${encodeURIComponent(key)}`)
+        .then(response => {
+            if (!response.ok) throw new Error('네트워크 응답 실패');
+            return response.json();
+        })
+        .then(data => {
+            currentData = data || [];
+            renderItems(getSortedData(currentData, currentSort), grid);
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            grid.innerHTML = `<div class="col-12 text-center text-danger my-5">데이터를 가져오는 중 에러가 발생했습니다.</div>`;
+        });
+}
 
-    return items
-
-
-def is_relevant(key, name):
-    """검색 키워드와 상품명이 아예 무관하면 False.
-    번개장터가 검색결과 외에 추천/인기 상품 블록을 같이 내려줄 때가 있어서,
-    키워드 단어 중 하나도 상품명에 없으면 걸러낸다."""
-    if not name:
-        return False
-    name_norm = name.replace(" ", "").lower()
-    # 키워드를 공백 기준으로 쪼개서, 2글자 이상인 토큰 중 하나라도 상품명에 포함되면 관련있다고 판단
-    tokens = [t for t in key.split() if len(t) >= 2]
-    if not tokens:
-        tokens = [key]
-    # "동방OO" 검색어는 헬로마켓 폴백 검색처럼 "동방"이 빠진 상품명도 있을 수 있어서 같이 확인
-    if key[:2] == "동방" and len(key) > 2:
-        tokens.append(key[2:])
-    for t in tokens:
-        if t.replace(" ", "").lower() in name_norm:
-            return True
-    return False
-
-
-def fetch_from_apis(key):
-    """실제로 외부 사이트를 크롤링해서 통합 결과를 만드는 함수 (캐시 미적용 원본 로직).
-    두 사이트를 순차 호출하면 최악의 경우 대기시간이 합산되어 Vercel 함수 실행시간
-    제한(무료 플랜 기본 10초)에 걸릴 수 있어서, 동시에 병렬로 호출한다."""
-    item = []
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_bunjang = executor.submit(bunjang, key)
-        future_hellomarket = executor.submit(hellomarket, key)
-
-        try:
-            lbunjang = future_bunjang.result()
-        except Exception as e:
-            logger.info(f"번개장터 처리 중 예외 (key={key}): {e}")
-            lbunjang = []
-
-        try:
-            lhellomarket = future_hellomarket.result()
-        except Exception as e:
-            logger.info(f"헬로마켓 처리 중 예외 (key={key}): {e}")
-            lhellomarket = []
-
-    try:
-        for i in lbunjang:
-            item.append({
-                "name": i.get("name"),
-                "price": i.get("price"),
-                "url": f"https://m.bunjang.co.kr/products/{i.get('pid')}",
-                "img": i.get("productImage"),
-                "domain": "bunjang",
-            })
-    except Exception:
-        pass
-
-    try:
-        for i in lhellomarket:
-            item.append({
-                "name": i.get("title"),
-                "price": i.get("price"),
-                "url": f"https://hellomarket.com/item/{i.get('itemIdx')}",
-                "img": (i.get("imageUrl").split("?")[0] if i.get("imageUrl") else None),
-                "domain": "hellomarket",
-            })
-    except Exception:
-        pass
-
-    # 🔎 키워드와 무관한 항목(추천/인기 상품 등) 걸러내기
-    before_count = len(item)
-    item = [i for i in item if is_relevant(key, i.get("name"))]
-    filtered_count = before_count - len(item)
-    if filtered_count > 0:
-        logger.info(f"key={key} 무관 항목 {filtered_count}개 필터링됨 (전체 {before_count}개 중)")
-
-    return item
-
-
-# ──────────────────────────────
-# 🗄️ 캐시를 거친 조회 함수
-# ──────────────────────────────
-def get_items_cached(key):
-    now = time.time()
-
-    # 1) 캐시 확인 (유효하면 바로 반환, 외부 API 호출 없음)
-    with CACHE_LOCK:
-        cached = CACHE.get(key)
-        if cached and (now - cached["timestamp"] < CACHE_TTL):
-            return cached["data"], True  # (데이터, 캐시 히트 여부)
-
-    # 2) 캐시 만료/없음 → 실제 크롤링. 같은 키워드 동시 요청은 락으로 한 번만 실행
-    key_lock = get_key_lock(key)
-    with key_lock:
-        # 락을 기다리는 동안 다른 요청이 이미 채워놨을 수 있으니 한 번 더 확인
-        with CACHE_LOCK:
-            cached = CACHE.get(key)
-            if cached and (time.time() - cached["timestamp"] < CACHE_TTL):
-                return cached["data"], True
-
-        data = fetch_from_apis(key)
-
-        with CACHE_LOCK:
-            CACHE[key] = {"data": data, "timestamp": time.time()}
-
-        return data, False
-
-
-# ──────────────────────────────
-# 📄 list.json 로드
-# ──────────────────────────────
-with open(os.path.join(BASE_DIR, "list.json"), "r", encoding="utf-8") as file:
-    dlist = json.load(file)
-
-
-app = Flask(__name__, template_folder=BASE_DIR)
-
-
-@app.route("/croll")
-def home():
-    return render_template("index.html", dlist=dlist)
-
-
-@app.route("/croll/list")
-def test_page():
-    return jsonify(dlist)
-
-
-@app.route("/croll/noimg.webp")
-def noimg():
-    # index.html의 <img src="noimg.webp">가 정상적으로 로드되도록
-    # 폴더 전체를 열어주는 대신 이 파일 하나만 명시적으로 서빙
-    return send_from_directory(BASE_DIR, "noimg.webp")
-
-
-@app.route("/croll/item/<key>")
-def item(key):
-    # Vercel 환경에서는 경로의 URL 인코딩(%EB%8F%99... 등)이 자동으로 안 풀릴 때가 있어서
-    # 명시적으로 디코딩. 이미 디코딩된 상태(로컬 등)여도 다시 적용해도 안전함.
-    key = unquote(key)
-
-    # 들어오는 모든 요청은 캐시 여부와 무관하게 항상 기록
-    ip = request.remote_addr
-    data, from_cache = get_items_cached(key)
-    logger.info(f"key={key} ip={ip} cache_hit={from_cache} result_count={len(data)}")
-
-    return jsonify(data)
-
-
-@app.route("/croll/debug/<key>")
-def debug(key):
-    """배포 환경에서 외부 API 호출이 실제로 어떤 상태코드/에러를 내는지 바로 확인용.
-    문제 원인 파악 후에는 지워도 되는 임시 라우트."""
-    key = unquote(key)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+function renderItems(data, grid) {
+    if (!data || data.length === 0) {
+        grid.innerHTML = `<div class="col-12 text-center text-muted my-5">조회된 상품이 없습니다.</div>`;
+        return;
     }
-    result = {"key": key}
 
-    try:
-        r = requests.get(
-            "https://api.bunjang.co.kr/api/search/v8/pw/product/specs/keyword",
-            headers=headers, params={"q": key}, timeout=8,
-        )
-        result["bunjang_status"] = r.status_code
-        result["bunjang_body_preview"] = r.text[:300]
-    except Exception as e:
-        result["bunjang_error"] = str(e)
+    // 💡 한 줄에 4개로 고정 — 세로 4줄 제한을 위해 최대 16개까지만 노출
+    const colsPerRow = 4;
+    const maxItems = colsPerRow * 4;
 
-    try:
-        r = requests.get(
-            "https://www.hellomarket.com/api/search/items",
-            headers=headers, params={"q": key}, timeout=8,
-        )
-        result["hellomarket_status"] = r.status_code
-        result["hellomarket_body_preview"] = r.text[:300]
-    except Exception as e:
-        result["hellomarket_error"] = str(e)
+    // 최대 노출 개수만큼만 잘라서 순회 처리
+    const limitedData = data.slice(0, maxItems);
 
-    return jsonify(result)
+    grid.innerHTML = '';
+    limitedData.forEach(item => {
+        const formattedPrice = item.price ? Number(item.price).toLocaleString() + '원' : '가격 정보 없음';
+        const imgUrl = item.img ? item.img : '/croll/noimg.webp';
+        const badgeClass = item.domain === 'bunjang' ? 'bg-bunjang' : 'bg-hellomarket';
+        const domainName = item.domain === 'bunjang' ? '번개장터' : '헬로마켓';
 
+        const cardHtml = `
+            <div class="col">
+                <a href="${item.url}" target="_blank" class="text-decoration-none text-dark">
+                    <div class="product-card">
+                        <div class="card-img-wrapper">
+                            <span class="badge-domain ${badgeClass}">${domainName}</span>
+                            <img src="${imgUrl}" alt="${item.name}" onerror="this.onerror=null;this.src='/croll/noimg.webp'">
+                        </div>
+                        <div class="card-body">
+                            <h5 class="card-title">${item.name}</h5>
+                            <div class="card-price">${formattedPrice}</div>
+                        </div>
+                    </div>
+                </a>
+            </div>
+        `;
+        grid.insertAdjacentHTML('beforeend', cardHtml);
+    });
+}
+</script>
 
-if __name__ == "__main__":
-    app.run(debug=True, threaded=True)
+</body>
+</html>

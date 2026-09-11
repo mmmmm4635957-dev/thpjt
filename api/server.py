@@ -230,7 +230,7 @@ with open(os.path.join(BASE_DIR, "list.json"), "r", encoding="utf-8") as file:
 app = Flask(__name__, template_folder=BASE_DIR)
 
 
-@app.route("/")
+@app.route("/croll")
 def home():
     return render_template("index.html", dlist=dlist)
 
